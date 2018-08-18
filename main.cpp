@@ -7,6 +7,7 @@
 #include <OpenMesh/Core/Mesh/PolyMesh_ArrayKernelT.hh>
 #include <OpenMesh/Tools/Decimater/DecimaterT.hh>
 #include <OpenMesh/Tools/Decimater/ModQuadricT.hh>
+#include <OpenMesh/Core/IO/MeshIO.hh>
 
 typedef OpenMesh::PolyMesh_ArrayKernelT<> OpenMeshMesh;
 typedef OpenMesh::Decimater::DecimaterT<OpenMeshMesh> DecimatOr;
@@ -101,42 +102,55 @@ void decimate(OpenMeshMesh &mesh, const PipelineData &pipelineData){
 
     decimatOr.module(quadricModule).unset_max_err();
     decimatOr.initialize();
-    decimatOr.decimate_to_faces(5000, 5000);
+    decimatOr.decimate_to_faces(15000, 5000);
     mesh.garbage_collection();
 }
 
 void openMeshToAssimp(OpenMeshMesh &mesh, aiScene &scene){
-    std::cout << "Has Meshes: " <<scene.HasMeshes() << std::endl;
+    aiMesh* newMesh = new aiMesh;
     scene.mNumMeshes = 1;
     scene.mMeshes = new aiMesh*[1];
-    aiMesh* newMesh = new aiMesh;
     scene.mMeshes[0] = newMesh;
+    scene.mMeshes[0]->mMaterialIndex = 0;
+    scene.mMaterials = new aiMaterial*[1];
+    std::cout << scene.HasMeshes() << std::endl;
+    aiMaterial* newMaterial = new aiMaterial;
+    scene.mMaterials[0] = newMaterial;
+    scene.mNumMaterials = 1;
+    newMesh->mMaterialIndex = 0;
+
+    scene.mRootNode = new aiNode();
+    scene.mRootNode->mMeshes = new unsigned int[1];
+    scene.mRootNode->mMeshes[0] = 0;
+    scene.mRootNode->mNumMeshes = 1;
 
     newMesh->mNumVertices = mesh.n_vertices();
     newMesh->mVertices = new aiVector3D[mesh.n_vertices()];    
+
+    std::cout << "Number of vertices: " << mesh.n_vertices() << std::endl;
     for(size_t vertexIndex = 0; vertexIndex < mesh.n_vertices(); vertexIndex++){
         const OpenMeshMesh::Point &point = mesh.point((OpenMeshMesh::VertexHandle)vertexIndex);
-        newMesh->mVertices[vertexIndex] = *new aiVector3D(point[0], point[1], point[2]);
+        //std::cout << point[0] << " " << point[1] << " " << point[2] << std::endl;
+        newMesh->mVertices[vertexIndex] = aiVector3D(point[0], point[1], point[2]);
     }
 
     newMesh->mNumFaces = mesh.n_faces();
     newMesh->mFaces = new aiFace[mesh.n_faces()];
-    std::vector<unsigned> vertexIndices;
+    std::vector<int> vertexIndices;
     std::cout << "Number of faces: " << mesh.n_faces() << std::endl;
     for(size_t faceIndex = 0; faceIndex < mesh.n_faces(); faceIndex++){
-        aiFace &newFace = *new aiFace;
-        newMesh->mFaces[faceIndex] = newFace;
+        aiFace newFace;
         size_t indexCount = 0;
-        for(OpenMeshMesh::FaceVertexIter faceIterator = mesh.fv_iter((OpenMeshMesh::FaceHandle)faceIndex); faceIterator.is_valid(); faceIterator++){
+        for(OpenMeshMesh::FaceVertexCCWIter faceIterator = mesh.fv_ccwiter((OpenMeshMesh::FaceHandle)faceIndex); faceIterator.is_valid(); faceIterator++){
             indexCount++;
-            vertexIndices.push_back((unsigned)(*faceIterator).idx());
-            //std::cout << "iterator " << faceIterator << " value " << *faceIterator << std::endl;
+            vertexIndices.push_back((*faceIterator).idx());
         }
         newFace.mNumIndices = indexCount;
-        newFace.mIndices = new unsigned[indexCount];
-        for(int i = 0; i < indexCount; i++){
+        newFace.mIndices = new unsigned int[indexCount];
+        for(size_t i = 0; i < indexCount; i++){
             newFace.mIndices[i] = vertexIndices[i];
         }
+        newMesh->mFaces[faceIndex] = newFace;
         vertexIndices.clear();
     }
 }
@@ -153,13 +167,12 @@ int main(const int argc, const char* argv[]){
         std::cout << importer.GetErrorString() << std::endl;
         return -1;
     }
-    std::cout << "Scene " << scene << std::endl; 
 
     OpenMeshMesh mesh;
     assimpToOpenMesh(scene, mesh);    
     std::cout << "Decimating" << std::endl;
     decimate(mesh, pipelineData);
-
+    OpenMesh::IO::write_mesh(mesh, "openmeshoutput.obj");
     aiScene targetScene;
     openMeshToAssimp(mesh, targetScene);
 
