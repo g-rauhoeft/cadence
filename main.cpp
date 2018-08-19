@@ -3,118 +3,225 @@
 #include <assimp/Importer.hpp>
 #include <assimp/Exporter.hpp>
 #include <assimp/scene.h>
+#include <assimp/postprocess.h>
 
-#include <OpenMesh/Core/Mesh/PolyMesh_ArrayKernelT.hh>
+#include <OpenMesh/Core/IO/MeshIO.hh>
+#include <OpenMesh/Core/Mesh/TriMesh_ArrayKernelT.hh>
 #include <OpenMesh/Tools/Decimater/DecimaterT.hh>
 #include <OpenMesh/Tools/Decimater/ModQuadricT.hh>
-#include <OpenMesh/Core/IO/MeshIO.hh>
+#include <OpenMesh/Tools/Decimater/ModHausdorffT.hh>
+#include <OpenMesh/Tools/Decimater/ModAspectRatioT.hh>
 
-typedef OpenMesh::PolyMesh_ArrayKernelT<> OpenMeshMesh;
+typedef OpenMesh::DefaultTraits OpenMeshTraits;
+typedef OpenMesh::TriMesh_ArrayKernelT<OpenMeshTraits> OpenMeshMesh;
 typedef OpenMesh::Decimater::DecimaterT<OpenMeshMesh> DecimatOr;
+typedef OpenMesh::Decimater::ModHausdorffT<OpenMeshMesh>::Handle HausdorffModule;
+typedef OpenMesh::Decimater::ModAspectRatioT<OpenMeshMesh>::Handle AspectRatioModule;
 typedef OpenMesh::Decimater::ModQuadricT<OpenMeshMesh>::Handle QuadricModule;
+typedef OpenMesh::IO::ImporterT<OpenMeshMesh> Importer;
 
-struct PipelineData {
+struct PipelineData
+{
+    PipelineData() : inputFile(""),
+                     inputType(""),
+                     outputFile(""),
+                     outputType(""),
+                     faces(0),
+                     preserveBoundary(false),
+                     aspectRatio(false),
+                     hausdorff(false),
+                     flags(0)
+    {
+    }
     std::string inputFile;
     std::string inputType;
     std::string outputFile;
     std::string outputType;
+    size_t faces;
+    bool preserveBoundary;
+    bool aspectRatio;
+    bool hausdorff;
     unsigned int flags;
 };
 
-void getFileType(const std::string &filename, std::string &filetype){
+void printPipelineData(const PipelineData &pipelineData)
+{
+    std::cout << "Input File: \t\t\t" << pipelineData.inputFile << std::endl;
+    std::cout << "Input Type: \t\t\t" << pipelineData.inputType << std::endl;
+    std::cout << "Output File: \t\t\t" << pipelineData.outputFile << std::endl;
+    std::cout << "Output Type: \t\t\t" << pipelineData.outputType << std::endl;
+    std::cout << "Faces: \t\t\t\t" << pipelineData.faces << std::endl;
+    std::cout << "Preserve Boundary: \t\t" << pipelineData.preserveBoundary << std::endl;
+    std::cout << "Aspect Ratio: \t\t\t" << pipelineData.aspectRatio << std::endl;
+    std::cout << "Hausdorff: \t\t\t" << pipelineData.hausdorff << std::endl;
+}
+
+void getFileType(const std::string &filename, std::string &filetype)
+{
     std::size_t found = filename.find_last_of(".");
-    
-    if(found != std::string::npos && found < filename.size()-1){
-        filetype = filename.substr(found+1, filename.size());
+
+    if (found != std::string::npos && found < filename.size() - 1)
+    {
+        filetype = filename.substr(found + 1, filename.size());
     }
 }
 
-void parseFlags(PipelineData &pipelineData, const int argc, const char* argv[]){
-    pipelineData.flags = 0;
+void parseFlags(PipelineData &pipelineData, const int argc, const char *argv[])
+{
+    pipelineData.flags = aiProcess_JoinIdenticalVertices |
+                         aiProcess_Triangulate |
+                         aiProcess_ValidateDataStructure |
+                         aiProcess_FindDegenerates;
 }
 
-void parseArgs(PipelineData &pipelineData, const int argc, const char* argv[]){
-    for(size_t i = 1; i < argc-1; i++){
-        const char* &arg = argv[i];
-        const char* &next = argv[i+1];
-        if(std::strcmp(arg, "-i") == 0){
+void parseArgs(PipelineData &pipelineData, const int argc, const char *argv[])
+{
+    for (size_t i = 1; i < argc - 1; i++)
+    {
+        const char *&arg = argv[i];
+        const char *&next = argv[i + 1];
+        if (std::strcmp(arg, "-i") == 0)
+        {
             pipelineData.inputFile = next;
             getFileType(next, pipelineData.inputType);
         }
-        if(std::strcmp(arg, "-o") == 0){
+        if (std::strcmp(arg, "-o") == 0)
+        {
             pipelineData.outputFile = next;
             getFileType(next, pipelineData.outputType);
+        }
+        if (std::strcmp(arg, "-f") == 0)
+        {
+            pipelineData.faces = std::stoi(next);
+        }
+        if (std::strcmp(arg, "-v") == 0)
+        {
+            pipelineData.faces = std::stoi(next) * 3;
+        }
+        if (std::strcmp(arg, "--preserve-boundary") == 0)
+        {
+            pipelineData.preserveBoundary = true;
+        }
+        if (std::strcmp(arg, "--prioritize-aspect-ratio") == 0)
+        {
+            pipelineData.aspectRatio = true;
+        }
+        if (std::strcmp(arg, "--use-hausdorff") == 0)
+        {
+            pipelineData.hausdorff = true;
         }
     }
 }
 
-const aiScene* importModel(Assimp::Importer &importer, const PipelineData pipelineData){
-    return importer.ReadFile(pipelineData.inputFile, pipelineData.flags); 
+const aiScene *importModel(Assimp::Importer &importer, const PipelineData pipelineData)
+{
+    return importer.ReadFile(pipelineData.inputFile, pipelineData.flags);
 }
 
-const aiExportFormatDesc* findFormat(Assimp::Exporter &exporter, const PipelineData &pipelineData){
-    for(size_t i = 0; i < exporter.GetExportFormatCount(); i++){
-        const aiExportFormatDesc* const e = exporter.GetExportFormatDescription(i);
-        if(e->fileExtension == pipelineData.outputType){
+const aiExportFormatDesc *findFormat(Assimp::Exporter &exporter, const PipelineData &pipelineData)
+{
+    for (size_t i = 0; i < exporter.GetExportFormatCount(); i++)
+    {
+        const aiExportFormatDesc *const e = exporter.GetExportFormatDescription(i);
+        if (e->fileExtension == pipelineData.outputType)
+        {
             return e;
         }
     }
     return 0;
 }
 
-void exportModel(Assimp::Exporter &exporter, const PipelineData &pipelineData, aiScene *scene){
-    std::cout << "Exporting model..." << std::endl;
-    const aiExportFormatDesc* const exportDescription = findFormat(exporter, pipelineData);
+void exportModel(Assimp::Exporter &exporter, const PipelineData &pipelineData, aiScene *scene)
+{
+    const aiExportFormatDesc *const exportDescription = findFormat(exporter, pipelineData);
     exporter.Export(scene, exportDescription->id, pipelineData.outputFile);
 }
 
-void assimpToOpenMesh(const aiScene* &scene, OpenMeshMesh &target){
-    if(scene->HasMeshes()){
-        for(size_t meshIndex = 0; meshIndex < scene->mNumMeshes; meshIndex++){
-            aiMesh* mesh = scene->mMeshes[meshIndex];
+void assimpToOpenMesh(const aiScene *&scene, OpenMeshMesh &target)
+{
+    if (scene->HasMeshes())
+    {
+        for (size_t meshIndex = 0; meshIndex < scene->mNumMeshes; meshIndex++)
+        {
+            aiMesh *mesh = scene->mMeshes[meshIndex];
             std::vector<OpenMeshMesh::VertexHandle> vertexHandles;
-            for(size_t vertexIndex = 0; vertexIndex < mesh->mNumVertices; vertexIndex++){
+            std::cout << "Adding vertices..." << std::endl;
+            for (size_t vertexIndex = 0; vertexIndex < mesh->mNumVertices; vertexIndex++)
+            {
                 aiVector3D &vertex = mesh->mVertices[vertexIndex];
-                vertexHandles.push_back(target.add_vertex(OpenMeshMesh::Point(vertex.x, vertex.y, vertex.z)));
+                OpenMeshMesh::VertexHandle vertexHandle = target.add_vertex(OpenMesh::Vec3f(vertex.x, vertex.y, vertex.z));
+                vertexHandles.push_back(vertexHandle);
             }
-            for(size_t faceIndex = 0; faceIndex < mesh->mNumFaces; faceIndex++){
+            std::cout << "Adding faces..." << std::endl;
+            for (size_t faceIndex = 0; faceIndex < mesh->mNumFaces; faceIndex++)
+            {
                 aiFace &face = mesh->mFaces[faceIndex];
                 std::vector<OpenMeshMesh::VertexHandle> faceVertexHandles;
-                for(size_t index = 0; index < face.mNumIndices; index++){
+                for (size_t index = 0; index < face.mNumIndices; index++)
+                {
                     faceVertexHandles.push_back(vertexHandles[face.mIndices[index]]);
                 }
                 target.add_face(faceVertexHandles);
                 faceVertexHandles.clear();
             }
-            for(size_t normalIndex = 0; normalIndex < mesh->mNumVertices; normalIndex++){
+            std::cout << "Adding normals..." << std::endl;
+            for (size_t normalIndex = 0; normalIndex < mesh->mNumVertices; normalIndex++)
+            {
                 aiVector3D &normal = mesh->mNormals[normalIndex];
-                // TODO: Add to OpenMeshMesh
             }
             vertexHandles.clear();
         }
     }
 }
 
-void decimate(OpenMeshMesh &mesh, const PipelineData &pipelineData){
+void decimate(OpenMeshMesh &mesh, const PipelineData &pipelineData)
+{
     DecimatOr decimatOr(mesh);
+    if (pipelineData.preserveBoundary)
+    {
+        std::cout << "Attempting to preserve boundary..." << std::endl;
+        mesh.request_vertex_status();
+        for (OpenMeshMesh::HalfedgeIter halfEdgeIterator = mesh.halfedges_begin(); halfEdgeIterator != mesh.halfedges_end(); halfEdgeIterator++)
+        {
+            if (mesh.is_boundary(*halfEdgeIterator))
+            {
+                mesh.status(*halfEdgeIterator).set_locked(true);
+            }
+        }
+    }
     QuadricModule quadricModule;
     decimatOr.add(quadricModule);
-
     decimatOr.module(quadricModule).unset_max_err();
+
+    if (pipelineData.hausdorff)
+    {
+        HausdorffModule hausdorff;
+        decimatOr.add(hausdorff);
+        decimatOr.module(hausdorff).set_binary(true);
+    }
+
+    if (pipelineData.aspectRatio)
+    {
+        AspectRatioModule aspectRatio;
+        decimatOr.add(aspectRatio);
+        decimatOr.module(aspectRatio).set_binary(true);
+    }
+
     decimatOr.initialize();
-    decimatOr.decimate_to_faces(15000, 5000);
+    decimatOr.info(std::cout);
+    decimatOr.decimate_to(pipelineData.faces);
     mesh.garbage_collection();
 }
 
-void openMeshToAssimp(OpenMeshMesh &mesh, aiScene &scene){
-    aiMesh* newMesh = new aiMesh;
+void openMeshToAssimp(OpenMeshMesh &mesh, aiScene &scene)
+{
+    aiMesh *newMesh = new aiMesh;
     scene.mNumMeshes = 1;
-    scene.mMeshes = new aiMesh*[1];
+    scene.mMeshes = new aiMesh *[1];
     scene.mMeshes[0] = newMesh;
     scene.mMeshes[0]->mMaterialIndex = 0;
-    scene.mMaterials = new aiMaterial*[1];
-    std::cout << scene.HasMeshes() << std::endl;
-    aiMaterial* newMaterial = new aiMaterial;
+    scene.mMaterials = new aiMaterial *[1];
+    aiMaterial *newMaterial = new aiMaterial;
     scene.mMaterials[0] = newMaterial;
     scene.mNumMaterials = 1;
     newMesh->mMaterialIndex = 0;
@@ -125,29 +232,30 @@ void openMeshToAssimp(OpenMeshMesh &mesh, aiScene &scene){
     scene.mRootNode->mNumMeshes = 1;
 
     newMesh->mNumVertices = mesh.n_vertices();
-    newMesh->mVertices = new aiVector3D[mesh.n_vertices()];    
+    newMesh->mVertices = new aiVector3D[mesh.n_vertices()];
 
-    std::cout << "Number of vertices: " << mesh.n_vertices() << std::endl;
-    for(size_t vertexIndex = 0; vertexIndex < mesh.n_vertices(); vertexIndex++){
+    for (size_t vertexIndex = 0; vertexIndex < mesh.n_vertices(); vertexIndex++)
+    {
         const OpenMeshMesh::Point &point = mesh.point((OpenMeshMesh::VertexHandle)vertexIndex);
-        //std::cout << point[0] << " " << point[1] << " " << point[2] << std::endl;
         newMesh->mVertices[vertexIndex] = aiVector3D(point[0], point[1], point[2]);
     }
 
     newMesh->mNumFaces = mesh.n_faces();
     newMesh->mFaces = new aiFace[mesh.n_faces()];
     std::vector<int> vertexIndices;
-    std::cout << "Number of faces: " << mesh.n_faces() << std::endl;
-    for(size_t faceIndex = 0; faceIndex < mesh.n_faces(); faceIndex++){
+    for (size_t faceIndex = 0; faceIndex < mesh.n_faces(); faceIndex++)
+    {
         aiFace newFace;
         size_t indexCount = 0;
-        for(OpenMeshMesh::FaceVertexCCWIter faceIterator = mesh.fv_ccwiter((OpenMeshMesh::FaceHandle)faceIndex); faceIterator.is_valid(); faceIterator++){
+        for (OpenMeshMesh::FaceVertexCCWIter faceIterator = mesh.fv_ccwiter((OpenMeshMesh::FaceHandle)faceIndex); faceIterator.is_valid(); faceIterator++)
+        {
             indexCount++;
             vertexIndices.push_back((*faceIterator).idx());
         }
         newFace.mNumIndices = indexCount;
         newFace.mIndices = new unsigned int[indexCount];
-        for(size_t i = 0; i < indexCount; i++){
+        for (size_t i = 0; i < indexCount; i++)
+        {
             newFace.mIndices[i] = vertexIndices[i];
         }
         newMesh->mFaces[faceIndex] = newFace;
@@ -155,24 +263,28 @@ void openMeshToAssimp(OpenMeshMesh &mesh, aiScene &scene){
     }
 }
 
-int main(const int argc, const char* argv[]){
+int main(const int argc, const char *argv[])
+{
     PipelineData pipelineData;
     parseArgs(pipelineData, argc, argv);
     parseFlags(pipelineData, argc, argv);
+    printPipelineData(pipelineData);
     Assimp::Importer importer;
     Assimp::Exporter exporter;
 
     const aiScene *scene = importModel(importer, pipelineData);
-    if(!scene){
+    if (!scene)
+    {
         std::cout << importer.GetErrorString() << std::endl;
         return -1;
     }
 
     OpenMeshMesh mesh;
-    assimpToOpenMesh(scene, mesh);    
-    std::cout << "Decimating" << std::endl;
+    assimpToOpenMesh(scene, mesh);
+    //OpenMesh::IO::read_mesh(mesh, "groot.ply");
+    std::cout << "Starting decimation..." << std::endl;
     decimate(mesh, pipelineData);
-    OpenMesh::IO::write_mesh(mesh, "openmeshoutput.obj");
+    //OpenMesh::IO::write_mesh(mesh, "test.obj");
     aiScene targetScene;
     openMeshToAssimp(mesh, targetScene);
 
