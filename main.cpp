@@ -8,9 +8,10 @@
 #include <OpenMesh/Core/IO/MeshIO.hh>
 #include <OpenMesh/Core/Mesh/TriMesh_ArrayKernelT.hh>
 #include <OpenMesh/Tools/Decimater/DecimaterT.hh>
-#include <OpenMesh/Tools/Decimater/ModQuadricT.hh>
 #include <OpenMesh/Tools/Decimater/ModHausdorffT.hh>
 #include <OpenMesh/Tools/Decimater/ModAspectRatioT.hh>
+#include <OpenMesh/Tools/Decimater/ModQuadricT.hh>
+#include <OpenMesh/Core/IO/importer/ImporterT.hh>
 
 typedef OpenMesh::DefaultTraits OpenMeshTraits;
 typedef OpenMesh::TriMesh_ArrayKernelT<OpenMeshTraits> OpenMeshMesh;
@@ -51,9 +52,14 @@ void printPipelineData(const PipelineData &pipelineData)
     std::cout << "Output File: \t\t\t" << pipelineData.outputFile << std::endl;
     std::cout << "Output Type: \t\t\t" << pipelineData.outputType << std::endl;
     std::cout << "Faces: \t\t\t\t" << pipelineData.faces << std::endl;
-    std::cout << "Preserve Boundary: \t\t" << pipelineData.preserveBoundary << std::endl;
     std::cout << "Aspect Ratio: \t\t\t" << pipelineData.aspectRatio << std::endl;
     std::cout << "Hausdorff: \t\t\t" << pipelineData.hausdorff << std::endl;
+    std::cout << "Flags: \t\t\t\t" << pipelineData.flags << std::endl;
+}
+
+void printStats(const OpenMeshMesh &mesh){
+    std::cout << "Vertices: \t\t\t" << mesh.n_vertices() << std::endl;
+    std::cout << "Faces: \t\t\t\t" << mesh.n_faces() << std::endl;
 }
 
 void getFileType(const std::string &filename, std::string &filetype)
@@ -68,15 +74,16 @@ void getFileType(const std::string &filename, std::string &filetype)
 
 void parseFlags(PipelineData &pipelineData, const int argc, const char *argv[])
 {
-    pipelineData.flags = aiProcess_JoinIdenticalVertices |
-                         aiProcess_Triangulate |
-                         aiProcess_ValidateDataStructure |
-                         aiProcess_FindDegenerates;
+    pipelineData.flags = aiProcess_JoinIdenticalVertices
+                        | aiProcess_Triangulate
+                        | aiProcess_FindInvalidData
+                        | aiProcess_FindDegenerates
+                        | aiProcess_ValidateDataStructure;
 }
 
 void parseArgs(PipelineData &pipelineData, const int argc, const char *argv[])
 {
-    for (size_t i = 1; i < argc - 1; i++)
+    for (size_t i = 1; i < argc-1; i++)
     {
         const char *&arg = argv[i];
         const char *&next = argv[i + 1];
@@ -97,10 +104,6 @@ void parseArgs(PipelineData &pipelineData, const int argc, const char *argv[])
         if (std::strcmp(arg, "-v") == 0)
         {
             pipelineData.faces = std::stoi(next) * 3;
-        }
-        if (std::strcmp(arg, "--preserve-boundary") == 0)
-        {
-            pipelineData.preserveBoundary = true;
         }
         if (std::strcmp(arg, "--prioritize-aspect-ratio") == 0)
         {
@@ -141,6 +144,7 @@ void assimpToOpenMesh(const aiScene *&scene, OpenMeshMesh &target)
 {
     if (scene->HasMeshes())
     {
+        Importer importer(target);
         for (size_t meshIndex = 0; meshIndex < scene->mNumMeshes; meshIndex++)
         {
             aiMesh *mesh = scene->mMeshes[meshIndex];
@@ -149,7 +153,7 @@ void assimpToOpenMesh(const aiScene *&scene, OpenMeshMesh &target)
             for (size_t vertexIndex = 0; vertexIndex < mesh->mNumVertices; vertexIndex++)
             {
                 aiVector3D &vertex = mesh->mVertices[vertexIndex];
-                OpenMeshMesh::VertexHandle vertexHandle = target.add_vertex(OpenMesh::Vec3f(vertex.x, vertex.y, vertex.z));
+                OpenMeshMesh::VertexHandle vertexHandle = importer.add_vertex(OpenMesh::Vec3f(vertex.x, vertex.y, vertex.z));
                 vertexHandles.push_back(vertexHandle);
             }
             std::cout << "Adding faces..." << std::endl;
@@ -157,11 +161,14 @@ void assimpToOpenMesh(const aiScene *&scene, OpenMeshMesh &target)
             {
                 aiFace &face = mesh->mFaces[faceIndex];
                 std::vector<OpenMeshMesh::VertexHandle> faceVertexHandles;
+                //std::cout << "Face " << faceIndex << " ";
                 for (size_t index = 0; index < face.mNumIndices; index++)
                 {
+                    //std::cout << face.mIndices[index] << " ";
                     faceVertexHandles.push_back(vertexHandles[face.mIndices[index]]);
                 }
-                target.add_face(faceVertexHandles);
+                //std::cout << std::endl;
+                importer.add_face(faceVertexHandles);
                 faceVertexHandles.clear();
             }
             std::cout << "Adding normals..." << std::endl;
@@ -177,18 +184,6 @@ void assimpToOpenMesh(const aiScene *&scene, OpenMeshMesh &target)
 void decimate(OpenMeshMesh &mesh, const PipelineData &pipelineData)
 {
     DecimatOr decimatOr(mesh);
-    if (pipelineData.preserveBoundary)
-    {
-        std::cout << "Attempting to preserve boundary..." << std::endl;
-        mesh.request_vertex_status();
-        for (OpenMeshMesh::HalfedgeIter halfEdgeIterator = mesh.halfedges_begin(); halfEdgeIterator != mesh.halfedges_end(); halfEdgeIterator++)
-        {
-            if (mesh.is_boundary(*halfEdgeIterator))
-            {
-                mesh.status(*halfEdgeIterator).set_locked(true);
-            }
-        }
-    }
     QuadricModule quadricModule;
     decimatOr.add(quadricModule);
     decimatOr.module(quadricModule).unset_max_err();
@@ -209,7 +204,8 @@ void decimate(OpenMeshMesh &mesh, const PipelineData &pipelineData)
 
     decimatOr.initialize();
     decimatOr.info(std::cout);
-    decimatOr.decimate_to(pipelineData.faces);
+    size_t decimated = decimatOr.decimate_to(pipelineData.faces);
+    std::cout << decimated << " collapses performed." << std::endl;
     mesh.garbage_collection();
 }
 
@@ -281,9 +277,14 @@ int main(const int argc, const char *argv[])
 
     OpenMeshMesh mesh;
     assimpToOpenMesh(scene, mesh);
+    std::cout << "Mesh stats before decimation:" << std::endl;
+    printStats(mesh);
     //OpenMesh::IO::read_mesh(mesh, "groot.ply");
     std::cout << "Starting decimation..." << std::endl;
     decimate(mesh, pipelineData);
+
+    std::cout << "Mesh stats after decimation:" << std::endl;
+    printStats(mesh);
     //OpenMesh::IO::write_mesh(mesh, "test.obj");
     aiScene targetScene;
     openMeshToAssimp(mesh, targetScene);
