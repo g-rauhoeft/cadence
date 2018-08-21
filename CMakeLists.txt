@@ -7,5 +7,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 find_package(assimp REQUIRED)
 find_package(OpenMesh REQUIRED)
 
+install(TARGETS cadence DESTINATION bin)
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 target_link_libraries(cadence assimp OpenMeshCore OpenMeshTools)

@@ -11,6 +11,7 @@
 #include <OpenMesh/Tools/Decimater/ModHausdorffT.hh>
 #include <OpenMesh/Tools/Decimater/ModAspectRatioT.hh>
 #include <OpenMesh/Tools/Decimater/ModQuadricT.hh>
+#include <OpenMesh/Tools/Decimater/ModEdgeLengthT.hh>
 #include <OpenMesh/Core/IO/importer/ImporterT.hh>
 
 typedef OpenMesh::DefaultTraits OpenMeshTraits;
@@ -19,6 +20,7 @@ typedef OpenMesh::Decimater::DecimaterT<OpenMeshMesh> DecimatOr;
 typedef OpenMesh::Decimater::ModHausdorffT<OpenMeshMesh>::Handle HausdorffModule;
 typedef OpenMesh::Decimater::ModAspectRatioT<OpenMeshMesh>::Handle AspectRatioModule;
 typedef OpenMesh::Decimater::ModQuadricT<OpenMeshMesh>::Handle QuadricModule;
+typedef OpenMesh::Decimater::ModEdgeLengthT<OpenMeshMesh>::Handle EdgeLengthModule;
 typedef OpenMesh::IO::ImporterT<OpenMeshMesh> Importer;
 
 struct PipelineData
@@ -31,7 +33,8 @@ struct PipelineData
                      preserveBoundary(false),
                      aspectRatio(false),
                      hausdorff(false),
-                     flags(0)
+                     edgeLength(false),
+		     flags(0)
     {
     }
     std::string inputFile;
@@ -42,6 +45,7 @@ struct PipelineData
     bool preserveBoundary;
     bool aspectRatio;
     bool hausdorff;
+    bool edgeLength;
     unsigned int flags;
 };
 
@@ -54,6 +58,7 @@ void printPipelineData(const PipelineData &pipelineData)
     std::cout << "Faces: \t\t\t\t" << pipelineData.faces << std::endl;
     std::cout << "Aspect Ratio: \t\t\t" << pipelineData.aspectRatio << std::endl;
     std::cout << "Hausdorff: \t\t\t" << pipelineData.hausdorff << std::endl;
+    std::cout << "Edge Length: \t\t\t" << pipelineData.edgeLength << std::endl;
     std::cout << "Flags: \t\t\t\t" << pipelineData.flags << std::endl;
 }
 
@@ -113,6 +118,10 @@ void parseArgs(PipelineData &pipelineData, const int argc, const char *argv[])
         {
             pipelineData.hausdorff = true;
         }
+	if (std::strcmp(arg, "--prioritize-short-edges") == 0)
+	{
+	    pipelineData.edgeLength = true;
+	}
     }
 }
 
@@ -200,6 +209,13 @@ void decimate(OpenMeshMesh &mesh, const PipelineData &pipelineData)
         AspectRatioModule aspectRatio;
         decimatOr.add(aspectRatio);
         decimatOr.module(aspectRatio).set_binary(true);
+    }
+
+    if (pipelineData.edgeLength)
+    {
+	EdgeLengthModule edgeLength;
+	decimatOr.add(edgeLength);
+	decimatOr.module(edgeLength).set_binary(true);
     }
 
     decimatOr.initialize();
